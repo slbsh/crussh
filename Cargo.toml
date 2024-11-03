@@ -1,0 +1,29 @@
+[package]
+name = "sshc-russh-test"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+russh = "0.45"
+russh-keys = { version = "0.45", default-features = false }
+ed25519-dalek = { version = "2.1", default-features = false }
+
+tokio = { version = "1.40", default-features = false, features = ["sync"] }
+async-trait = "0.1"
+
+serde = { version = "1.0", features = ["derive", "rc"] }
+toml = "0.8"
+bincode = "1.3"
+colored = "2.1"
+bitflags = { version = "2.6", features = ["serde"] }
+rand = "0.8.5"
+
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = "z"
+strip = true
+debug = false
