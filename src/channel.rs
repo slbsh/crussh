@@ -40,7 +40,7 @@ impl fmt::Display for Channel {
 			let children = channel.children.read().unwrap();
 			children.iter().enumerate().try_for_each(|(i, child)| {
 				write!(f, "{prefix}{}─", if i == children.len() - 1 { "└" } else { "├" })?;
-				draw_tree(child, f, &format!("{prefix}"))
+				draw_tree(child, f, prefix)
 			})
 		}
 
@@ -61,12 +61,6 @@ impl Channel {
 			perms:    Arc::new(RwLock::new(Vec::new())),
 			children: Arc::new(RwLock::new(Vec::new())),
 		}
-	}
-
-	pub fn get_perm_by<F: Fn(&RestrictionKind) -> bool>(&self, cond: F) -> Option<PermLevel> {
-		self.perms.read().unwrap().iter()
-			.find(|p| cond(&p.0))
-			.map(|p| p.1)
 	}
 
 	pub fn subscribe(self) -> SubscribedChannel {
@@ -104,7 +98,7 @@ pub enum RestrictionKind {
 bitflags::bitflags! {
 	#[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, serde::Deserialize)]
 	pub struct PermLevel: u8 {
-		const NONE   = 0;
+      const NONE   = 0;
 		const READ   = 1;
 		const WRITE  = 1 << 1;
 		const MANAGE = 1 << 2;
