@@ -11,7 +11,6 @@ pub struct Server {
 	#[serde(skip)]
 	#[serde(default = "Config::init")]
 	pub config:       Config,
-	pub roles:        Mutex<HashMap<Arc<str>, PermLevel>>,
 	pub users:        Mutex<HashMap<Arc<str>, UserConfLock>>,
 	#[serde(skip)]
 	pub online_users: Mutex<HashMap<Arc<str>, UserConfLock>>, // TODO: unduplicate entries
@@ -24,15 +23,12 @@ impl Default for Server {
 			config:       Config::init(),
 			users:        Mutex::new(HashMap::new()),
 			online_users: Mutex::new(HashMap::new()),
-			roles:        Mutex::new(HashMap::new()),
 		};
 
-		server.roles.lock().unwrap()
-			.insert(Arc::from("admin"), PermLevel::READ|PermLevel::WRITE|PermLevel::MANAGE);
 		server.users.lock().unwrap()
 			.insert(Arc::from("admin"), Arc::new(Mutex::new(crate::user::UserConfig {
 				hash: 0xd8acbb0fa6cac9, // "admin"
-				roles: vec![Arc::from("admin")],
+				roles: vec![(Box::from("admin"), PermLevel::READ|PermLevel::WRITE|PermLevel::MANAGE)],
 			})));
 
 		server

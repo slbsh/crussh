@@ -8,7 +8,7 @@ use serde::Deserialize;
 use russh::CryptoVec;
 
 use crate::server::Server;
-use crate::channel::SubscribedChannel;
+use crate::channel::{SubscribedChannel, PermLevel};
 use crate::event::Event;
 
 
@@ -32,7 +32,7 @@ pub type UserConfLock = Arc<Mutex<UserConfig>>;
 pub struct UserConfig {
 	#[serde(deserialize_with = "UserConfig::deserialize_hash")]
 	pub hash:  u64,
-	pub roles: Vec<Arc<str>>,
+	pub roles: Vec<(Box<str>, PermLevel)>,
 }
 
 impl UserConfig {
@@ -62,6 +62,14 @@ impl UserConfig {
 		pass.hash(&mut hasher);
 		hasher.finish()
 	}
+
+   pub fn get_role(&self, name: &str) -> Option<PermLevel> {
+      self.roles.iter().find_map(|(n, p)| (&**n == name).then_some(*p))
+   }
+
+   pub fn get_global_perms(&self) -> PermLevel {
+      self.roles.iter().fold(PermLevel::NONE, |acc, (_, p)| acc | *p)
+   }
 }
 
 pub enum UserState {
