@@ -54,7 +54,7 @@ async fn main() {
 		methods:                     MethodSet::PASSWORD,
 		..Default::default()
 	};
-	
+
 	ChatClient::new()
 		.run_on_address(Arc::new(config), "0.0.0.0:2222")
 		.await.unwrap();
@@ -94,11 +94,12 @@ impl Drop for ChatClient {
 
 impl ChatClient {
 	// SAFETY: zeroing an Arc is "UB", but we prevent it from dropping so its fine
+	// SAFETY: fu Mai
 	#[allow(invalid_value)] 
 	fn new() -> Self {
 		Self {
 			server: Arc::new(
-					std::fs::read(STATE_FILE)
+				std::fs::read(STATE_FILE)
 					.inspect_err(|e| eprintln!("failed to open `{STATE_FILE}`: {e}"))
 					.map(|s| bincode::deserialize(&s).unwrap_or_else(|e|
 						panic!("failed to parse `{STATE_FILE}`: {e}")))
@@ -153,7 +154,7 @@ impl Handler for ChatClient {
 
 	async fn channel_close(
 		&mut self, channel: ChannelId, session: &mut Session) 
-		-> Result<(), Self::Error> {
+	-> Result<(), Self::Error> {
 		// FIXME: this gets called twice on quit for some reason
 		let user = self.user.lock().await;
 		user.channel.send(Event::Terminate).unwrap();
@@ -180,7 +181,7 @@ impl Handler for ChatClient {
 	}
 
 	async fn data(&mut self, channel: ChannelId, data: &[u8], session: &mut Session)
-		-> Result<(), Self::Error> {
+	-> Result<(), Self::Error> {
 		macro_rules! data {
 			($data:expr) => { session.data(channel, CryptoVec::from_slice($data)) }}
 
@@ -189,8 +190,8 @@ impl Handler for ChatClient {
 		match data {
 			_ if matches!(user.state, UserState::Info(_)) => {
 				let UserState::Info(data) =
-					mem::replace(&mut user.state, UserState::Normal) 
-					else { unreachable!(); };
+				mem::replace(&mut user.state, UserState::Normal) 
+				else { unreachable!(); };
 
 				user.clear_info(&data).await;
 			},
@@ -241,7 +242,7 @@ impl Handler for ChatClient {
 
 			[27, 91, 65] | // up arrow //TODO: replies
 			[27, 91, 66]   // down arrow
-				=> (),
+			=> (),
 
 			[27, 91, 67] => { // right arrow
 				if user.cursor == user.buffer.len() { return Ok(()); }

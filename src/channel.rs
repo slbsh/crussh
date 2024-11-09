@@ -25,7 +25,7 @@ fn make_channel() -> Sender<Event> {
 }
 
 fn perms_sorted<'de, D: serde::Deserializer<'de>>(d: D) 
-	-> Result<Arc<RwLock<Vec<PermEntry>>>, D::Error> {
+-> Result<Arc<RwLock<Vec<PermEntry>>>, D::Error> {
 	use serde::Deserialize;
 	let mut perms = Vec::<PermEntry>::deserialize(d)?;
 	perms.sort_unstable_by(|a, b| a.0.cmp(&b.0));
@@ -49,8 +49,8 @@ impl fmt::Display for Channel {
 }
 
 pub struct SubscribedChannel {
-   pub rx:	  broadcast::Receiver<Event>,
-   channel: Channel,
+	pub rx:  broadcast::Receiver<Event>,
+	channel: Channel,
 }
 
 impl Channel {
@@ -65,8 +65,8 @@ impl Channel {
 
 	pub fn subscribe(self) -> SubscribedChannel {
 		SubscribedChannel { 
-		   rx:      self.tx.subscribe(), 
-		   channel: self,
+			rx:      self.tx.subscribe(), 
+			channel: self,
 		}
 	}
 }
@@ -98,7 +98,7 @@ pub enum RestrictionKind {
 bitflags::bitflags! {
 	#[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, serde::Deserialize)]
 	pub struct PermLevel: u8 {
-      const NONE   = 0;
+		const NONE   = 0;
 		const READ   = 1;
 		const WRITE  = 1 << 1;
 		const MANAGE = 1 << 2;
