@@ -109,6 +109,17 @@ impl ChatClient {
 			user: unsafe { mem::MaybeUninit::zeroed().assume_init() },
 		}
 	}
+
+	async fn close(&self, 
+		session: &mut Session,
+		channel: ChannelId, 
+		user: &mut tokio::sync::MutexGuard<'_, ManuallyDrop<User>>) {
+		user.channel.send(Event::Terminate).unwrap();
+		user.channel.send(Event::Leave(user.name.clone())).unwrap();
+
+		session.data(channel, CryptoVec::from_slice(b"\r"));
+		session.close(channel);
+	}
 }
 
 #[async_trait::async_trait]
@@ -152,19 +163,9 @@ impl Handler for ChatClient {
 		Ok(true)
 	}
 
-	async fn channel_close(
-		&mut self, channel: ChannelId, session: &mut Session) 
-	-> Result<(), Self::Error> {
-		// FIXME: this gets called twice on quit for some reason
-		let user = self.user.lock().await;
-		user.channel.send(Event::Terminate).unwrap();
-		user.channel.send(Event::Leave(user.name.clone())).unwrap();
-		drop(user);
-
-		session.data(channel, CryptoVec::from_slice(b"\r"));
-		session.close(channel);
-		Ok(())
-	}
+	async fn channel_close(&mut self, _: ChannelId, _: &mut Session) 
+	-> Result<(), Self::Error> 
+		{ Ok(()) }
 
 	async fn auth_password(&mut self, uname: &str, pass: &str) -> Result<Auth, Self::Error> {
 		match tokio::task::block_in_place(|| self.server.validate_pass(uname, pass)) {
@@ -196,10 +197,7 @@ impl Handler for ChatClient {
 				user.clear_info(&data).await;
 			},
 
-			[3] => { 
-				drop(user);
-				self.channel_close(channel, session).await.unwrap(); 
-			},
+			[3] => self.close(session, channel, &mut user).await,
 
 			[13] => {
 				if user.buffer.is_empty() { return Ok(()); }
@@ -207,14 +205,7 @@ impl Handler for ChatClient {
 				// FIXME: dont clone :p
 				if let Some(buffer) = trim(&user.buffer.clone()).strip_prefix(b":") {
 					if let Err(e) = self.command(channel, session, buffer, &mut user).await {
-						// FIXME: even with this, channel_close is still called twice
-						if e == "QUIT" { 
-							drop(user);
-							self.channel_close(channel, session).await.unwrap();
-							return Ok(());
-						}
-
-						user.info(e.bold().red().to_string().as_bytes()).await;
+						user.info(e.to_string().as_bytes()).await;
 						user.buf_clear();
 					};
 					return Ok(());
@@ -242,7 +233,7 @@ impl Handler for ChatClient {
 
 			[27, 91, 65] | // up arrow //TODO: replies
 			[27, 91, 66]   // down arrow
-			=> (),
+				=> (),
 
 			[27, 91, 67] => { // right arrow
 				if user.cursor == user.buffer.len() { return Ok(()); }

@@ -58,7 +58,7 @@ impl Server {
          .find(|((_,c),&path)| &*c.name == path)
          .ok_or_else(|| path.is_empty().then(|| channels.clone()))?;
       if path[1..].is_empty() 
-      { return Ok((channels, index)); }
+			{ return Ok((channels, index)); }
       Self::channel_from_path(&path[1..], channel.children.clone())
    }
 
