@@ -1,5 +1,5 @@
-use std::sync::{Arc, Mutex};
-use std::mem::{self, ManuallyDrop};
+use std::sync::{Arc, Weak, Mutex};
+use std::mem::ManuallyDrop;
 use tokio::task::{self, JoinHandle};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::broadcast::error::TryRecvError;
@@ -85,41 +85,43 @@ impl User {
          .expect("default channel does not exist")
          .clone();
 
-      let user = Arc::new(AsyncMutex::new(ManuallyDrop::new(Self { 
-         name, config, conn, 
-         channel: channel.subscribe(),
-         buffer: Vec::with_capacity(256),
-         cursor: 0,
-         state: UserState::Normal,
-         #[allow(invalid_value)]
-         handle: unsafe { mem::MaybeUninit::zeroed().assume_init() },
-      })));
-
-      tokio::task::block_in_place(|| crate::init!(
-         &mut user.blocking_lock().handle,
-         task::spawn(Self::event_loop(user.clone()))
-      ));
-
-      user
+		Arc::new_cyclic(|user|
+			AsyncMutex::new(ManuallyDrop::new(Self { 
+				name, config, conn, 
+				handle: task::spawn(Self::event_loop(user.clone())),
+				channel: channel.subscribe(),
+				buffer: Vec::with_capacity(256),
+				cursor: 0,
+				state: UserState::Normal,
+			})))
    }
 
-   async fn event_loop(user: Arc<AsyncMutex<ManuallyDrop<Self>>>) {
+   async fn event_loop(user: Weak<AsyncMutex<ManuallyDrop<Self>>>) {
       loop {
+			let Some(user) = user.upgrade() else {
+				eprintln!("User dropped!");
+				break;
+			};
+
          let event = match user.lock().await.channel.rx.try_recv() {
             Err(TryRecvError::Empty) => {
-               tokio::task::yield_now().await;
+               tokio::task::yield_now().await; //FIXME: busy looping! bad for obvious reasons.
+					std::hint::spin_loop(); // maybe not?
                continue;
             },
-            Ok(Event::Terminate) => break,
+				// TODO we could just drop the Arc (and as a matter of fact we do)
+				// but this is here so we're certain the user burns through all of the event queue
+				// before quit. Might not be necessary given that you dont really care to get all the
+				// events if you're quitting anyway.
+            Ok(Event::Terminate) => break, 
             Ok(event) => event,
             Err(TryRecvError::Closed) => unreachable!(),
-            Err(TryRecvError::Lagged(_)) => {
+            Err(TryRecvError::Lagged(num)) => {
                #[cfg(debug_assertions)]
                eprintln!("Event lagged");
 
                user.lock().await.conn
-                  .data(CryptoVec::from_slice(b"ECHL: Channel Lost Event\r\n"))
-               .await;
+                  .data(CryptoVec::from(format!("ECHL: Channel Lost Events: {num}\r\n"))).await;
                continue;
             },
          };
@@ -134,7 +136,7 @@ impl User {
             },
             UserState::Normal => {
                user.conn.data(CryptoVec::from(format!("{event}\r\n"))).await;
-            },
+				},
             UserState::Info(ref data) => {
                user.clear_info(data).await;
                user.conn.data(CryptoVec::from(format!("{event}\r\n"))).await;
