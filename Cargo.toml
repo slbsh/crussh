@@ -3,24 +3,23 @@ name = "sshc-russh-test"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-russh = "0.45"
-russh-keys = { version = "0.45", default-features = false }
+russh = "0.46" # russh is kinda weird and needs ye to get like 2 more carates + tokio to do any useful key stuff
+russh-keys = { version = "0.46", default-features = false } 
 ed25519-dalek = { version = "2.1", default-features = false }
 
-tokio = { version = "1.40", default-features = false, features = ["sync"] }
-async-trait = "0.1"
+tokio = { version = "1.41", default-features = false, features = ["sync"] }
+async-trait = "0.1" # grrrr >:(
 
 serde = { version = "1.0", features = ["derive", "rc"] }
-toml = "0.8"
-bincode = "1.3"
-colored = "2.1"
+# toml = "0.8"    # not currently used. mayhaps use for the config file?
+bincode = "1.3" # find a better way to store server state at some point?
+colored = "2.1" # this could prob go
 bitflags = { version = "2.6", features = ["serde"] }
-rand = "0.8.5"
+rand = "0.8.5" # password gen. rand might be an overkill as we dont need high quality randomness
 
 
+# the usual :p
 [profile.release]
 lto = true
 codegen-units = 1
