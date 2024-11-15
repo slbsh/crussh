@@ -20,8 +20,10 @@ use server::Server;
 use event::Event;
 
 
-pub const KEY_FILE: &str	= "key";
-pub const STATE_FILE: &str  = "state.bin";
+pub const KEY_FILE: &str   = "key";
+pub const STATE_FILE: &str = "state.bin";
+
+const MAX_MSG_LEN: usize = 1024;
 
 #[macro_export]
 macro_rules! init {
@@ -248,6 +250,8 @@ impl Handler for ChatClient {
 			},
 
 			_ => {
+				if user.buffer.len() >= MAX_MSG_LEN { return Ok(()); }
+
 				let cursor = user.cursor;
 				user.buffer.splice(cursor..cursor, data.iter().cloned());
 				user.cursor += data.len();
