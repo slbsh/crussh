@@ -6,7 +6,7 @@ use crate::event::Event;
 
 const BUFFER_SIZE: usize = 4;
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct Channel {
 	pub name: Arc<str>, // TODO: make weak so it can be dropped
 	#[serde(skip)]
@@ -88,7 +88,7 @@ impl std::ops::Deref for SubscribedChannel {
 
 pub type PermEntry = (RestrictionKind, PermLevel);
 
-#[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, serde::Deserialize)]
+#[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum RestrictionKind {
 	User(Arc<str>),
 	Role(Arc<str>),
@@ -96,7 +96,7 @@ pub enum RestrictionKind {
 }
 
 bitflags::bitflags! {
-	#[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, serde::Deserialize)]
+	#[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
 	pub struct PermLevel: u8 {
 		const NONE   = 0;
 		const READ   = 1;

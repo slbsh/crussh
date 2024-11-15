@@ -5,7 +5,7 @@ use crate::channel::{Channel, PermLevel};
 use crate::user::{UserConfLock, UserConfig};
 use crate::config::Config;
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct Server {
    pub channels:     Arc<RwLock<Vec<Channel>>>, // FIXME: double indirection
    #[serde(skip)]
@@ -61,6 +61,12 @@ impl Server {
 			{ return Ok((channels, index)); }
       Self::channel_from_path(&path[1..], channel.children.clone())
    }
+
+   // TODO: serialize on edit/exit
+	pub fn save(&self) {
+		let state = bincode::serialize(&self).unwrap();
+		std::fs::write(crate::STATE_FILE, state).unwrap();
+	}
 
    // TODO: serialize on edit/exit
 }

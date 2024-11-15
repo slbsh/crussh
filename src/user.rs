@@ -28,7 +28,7 @@ pub struct User {
 // condvar to save config changes
 pub type UserConfLock = Arc<Mutex<UserConfig>>;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, serde::Serialize)]
 pub struct UserConfig {
    #[serde(deserialize_with = "UserConfig::deserialize_hash")]
    pub hash:  u64,
