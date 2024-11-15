@@ -6,7 +6,6 @@ use tokio::sync::Mutex;
 use russh::server::{Server as SshServer, Msg, Session, Handler, Auth};
 use russh::{MethodSet, CryptoVec, ChannelId};
 use russh_keys::key::KeyPair;
-use colored::Colorize;
 
 mod user;
 mod channel;
@@ -106,7 +105,6 @@ impl ChatClient {
 					.map(|s| bincode::deserialize(&s).unwrap_or_else(|e|
 						panic!("failed to parse `{STATE_FILE}`: {e}")))
 					.unwrap_or_default()),
-			// user:   Arc::new(Mutex::new(ManuallyDrop::new(unsafe { mem::MaybeUninit::zeroed().assume_init() }))),
 			// SAFETY: pretty sure the first instance is only there to init
 			user: unsafe { mem::MaybeUninit::zeroed().assume_init() },
 		}
