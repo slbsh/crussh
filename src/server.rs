@@ -67,6 +67,4 @@ impl Server {
 		let state = bincode::serialize(&self).unwrap();
 		std::fs::write(crate::STATE_FILE, state).unwrap();
 	}
-
-   // TODO: serialize on edit/exit
 }

@@ -1,5 +1,5 @@
 use std::sync::{Arc, RwLock};
-use tokio::sync::broadcast::{self, Sender};
+use tokio::sync::{Notify, broadcast::{self, Sender}};
 use std::fmt;
 
 use crate::event::Event;
@@ -8,11 +8,12 @@ const BUFFER_SIZE: usize = 4;
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct Channel {
-	pub name: Arc<str>, // TODO: make weak so it can be dropped
+	pub name: Arc<str>, // TODO: make weak so it can be dropped.. 
+	// or just dont have an arc, cloning the string is prob still cheeper than an atomic op
 	#[serde(skip)]
 	#[serde(default = "make_channel")]
 	pub tx: Sender<Event>,
-	// history: Vec<Event>, // maybe
+	// history: Vec<Event>, // TODO: one way to handle it... maybe not the best
 	#[serde(deserialize_with = "perms_sorted")]
 	pub perms: Arc<RwLock<Vec<PermEntry>>>,
 
@@ -49,8 +50,9 @@ impl fmt::Display for Channel {
 }
 
 pub struct SubscribedChannel {
-	pub rx:  broadcast::Receiver<Event>,
-	channel: Channel,
+	pub rx:     broadcast::Receiver<Event>,
+	pub notify: Arc<Notify>, // we are slaves to the async
+	channel:    Channel,
 }
 
 impl Channel {
@@ -66,10 +68,20 @@ impl Channel {
 	pub fn subscribe(self) -> SubscribedChannel {
 		SubscribedChannel { 
 			rx:      self.tx.subscribe(), 
+			notify:  Arc::new(Notify::new()),
 			channel: self,
 		}
 	}
 }
+
+impl SubscribedChannel {
+	pub fn send(&self, event: Event) -> Result<(), broadcast::error::SendError<Event>> {
+		self.tx.send(event)?;
+		self.notify.notify_one();
+		Ok(())
+	}
+}
+
 
 impl std::ops::Deref for Channel {
 	type Target = Sender<Event>;

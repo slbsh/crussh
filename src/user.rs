@@ -97,18 +97,24 @@ impl User {
    }
 
    async fn event_loop(user: Weak<AsyncMutex<ManuallyDrop<Self>>>) {
+		let notify = match user.upgrade() {
+			Some(user) => user.lock().await.channel.notify.clone(),
+			None => panic!("User dropped on init!"),
+		};
+
       loop {
-			let Some(user) = user.upgrade() else {
-				eprintln!("User dropped!");
-				break;
+			notify.notified().await;
+
+			let mut user = match user.upgrade() {
+				Some(user) => user.lock_owned().await,
+				None => {
+					eprintln!("User dropped!");
+					break;
+				},
 			};
 
-         let event = match user.lock().await.channel.rx.try_recv() {
-            Err(TryRecvError::Empty) => {
-               tokio::task::yield_now().await; //FIXME: busy looping! bad for obvious reasons.
-					std::hint::spin_loop(); // maybe not?
-               continue;
-            },
+         let event = match user.channel.rx.try_recv() {
+            Err(TryRecvError::Empty) => continue,
 				// TODO we could just drop the Arc (and as a matter of fact we do)
 				// but this is here so we're certain the user burns through all of the event queue
 				// before quit. Might not be necessary given that you dont really care to get all the
@@ -120,13 +126,10 @@ impl User {
                #[cfg(debug_assertions)]
                eprintln!("Event lagged");
 
-               user.lock().await.conn
-                  .data(CryptoVec::from(format!("ECHL: Channel Lost Events: {num}\r\n"))).await;
+               user.conn.data(CryptoVec::from(format!("ECHL: Channel Lost Events: {num}\r\n"))).await;
                continue;
             },
          };
-
-         let user = user.lock().await;
 
          match user.state {
             UserState::Normal if !user.buffer.is_empty() => {
@@ -169,7 +172,7 @@ impl User {
    }
 
    pub fn buf_clear(&mut self) {
-      self.buffer.clear(); // FIXME: this allows overallocatting by the user
+      self.buffer.clear();
       self.cursor = 0;
    }
 }

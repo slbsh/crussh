@@ -58,7 +58,7 @@ impl crate::ChatClient {
 		let channel_from_path = |path: &[&str], offset| match path.first() {
 			Some(&"") => Server::channel_from_path(&path[1..(path.len() as isize + offset) as usize], self.server.channels.clone()),
 			Some(_)   => Server::channel_from_path(&path[ ..(path.len() as isize + offset) as usize], user.channel.children.clone()),
-			None	  => Err(None),
+			None      => Err(None),
 		};
 
 		match cmd.as_slice() {
