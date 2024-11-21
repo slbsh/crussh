@@ -1,5 +1,6 @@
 use std::sync::{Arc, Weak, Mutex};
 use std::mem::ManuallyDrop;
+use std::path::{PathBuf, Path};
 use tokio::task::{self, JoinHandle};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::broadcast::error::TryRecvError;
@@ -22,13 +23,15 @@ pub struct User {
    conn:        Connection,
 
    handle:      JoinHandle<()>,
+
    pub channel: SubscribedChannel,
+	pub path:    PathBuf,
 }
 
 // condvar to save config changes
 pub type UserConfLock = Arc<Mutex<UserConfig>>;
 
-#[derive(Debug, Deserialize, serde::Serialize)]
+#[derive(Deserialize, serde::Serialize)]
 pub struct UserConfig {
    #[serde(deserialize_with = "UserConfig::deserialize_hash")]
    pub hash:  u64,
@@ -36,19 +39,22 @@ pub struct UserConfig {
 }
 
 impl UserConfig {
-   pub fn new() -> (Self, [u8; 8]) {
+   pub fn new(pass: &[u8]) -> Self {
+      Self { 
+         hash: UserConfig::hash(pass),
+         roles: Vec::new(),
+      }
+   }
+
+	pub fn gen_pass() -> [u8; 8] {
       use rand::Rng;
       let mut pass = [0; 8];
       rand::thread_rng()
          .sample_iter(&rand::distributions::Alphanumeric)
          .zip(pass.iter_mut())
          .for_each(|(c, b)| *b = c);
-
-      (Self { 
-         hash: UserConfig::hash(&pass[..]),
-         roles: Vec::new(),
-      }, pass)
-   }
+		pass
+	}
 
    fn deserialize_hash<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
       use serde::de::Error;
@@ -79,17 +85,14 @@ pub enum UserState {
 
 impl User {
    pub fn new(name: Arc<str>, config: UserConfLock, server: Arc<Server>, conn: Connection) -> Arc<AsyncMutex<ManuallyDrop<Self>>> {
-      let channel = server.channels.read().unwrap()
-         .iter()
-         .find(|c| *c.name == *server.config.default_channel)
-         .expect("default channel does not exist")
-         .clone();
-
 		Arc::new_cyclic(|user|
 			AsyncMutex::new(ManuallyDrop::new(Self { 
 				name, config, conn, 
+				path: PathBuf::from("/"), // TODO: save user's current channel
 				handle: task::spawn(Self::event_loop(user.clone())),
-				channel: channel.subscribe(),
+				channel: crate::channel::Channel::subscribe(
+					&server.channel_from_path(&Path::new("/"))
+						.expect("default channel does not exist")),
 				buffer: Vec::with_capacity(256),
 				cursor: 0,
 				state: UserState::Normal,
@@ -103,8 +106,6 @@ impl User {
 		};
 
       loop {
-			notify.notified().await;
-
 			let mut user = match user.upgrade() {
 				Some(user) => user.lock_owned().await,
 				None => {
@@ -114,7 +115,11 @@ impl User {
 			};
 
          let event = match user.channel.rx.try_recv() {
-            Err(TryRecvError::Empty) => continue,
+            Err(TryRecvError::Empty) => {
+					std::mem::drop(user);
+					notify.notified().await;
+					continue;
+				},
 				// TODO we could just drop the Arc (and as a matter of fact we do)
 				// but this is here so we're certain the user burns through all of the event queue
 				// before quit. Might not be necessary given that you dont really care to get all the

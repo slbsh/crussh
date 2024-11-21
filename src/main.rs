@@ -11,7 +11,6 @@ mod user;
 mod channel;
 mod event;
 mod server;
-mod config;
 mod commands;
 
 use user::{User, Connection, UserState};

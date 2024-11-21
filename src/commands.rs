@@ -1,14 +1,12 @@
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::mem::{self, ManuallyDrop};
+use std::path::Path;
 use tokio::sync::MutexGuard;
 
 use russh::server::Session;
 use russh::{CryptoVec, ChannelId};
 
-use colored::Colorize;
-
-use crate::user::User;
-use crate::server::Server;
+use crate::user::{User, UserConfig};
 use crate::Event;
 use crate::channel::{PermLevel, RestrictionKind};
 use crate::channel::Channel;
@@ -57,12 +55,6 @@ impl crate::ChatClient {
 			.map_err(|_| CommandError::InvalidUtf8)?
 			.split(' ').collect::<Vec<_>>();
 
-		let channel_from_path = |path: &[&str], offset| match path.first() {
-			Some(&"") => Server::channel_from_path(&path[1..(path.len() as isize + offset) as usize], self.server.channels.clone()),
-			Some(_)   => Server::channel_from_path(&path[ ..(path.len() as isize + offset) as usize], user.channel.children.clone()),
-			None      => Err(None),
-		};
-
 		match cmd.as_slice() {
 			["help"] | ["h"] => {
 				const HELP: &[u8] = b"\
@@ -76,9 +68,14 @@ impl crate::ChatClient {
 					make-priv-channel, mkchp <name> - create a new private channel\r\n\
 					remove-channel, rmch <name>     - remove a channel\r\n\
 					channel, ch <name>              - move to a channel\r\n\
-					channels, lsc                   - list all channels\r\n\
-					users, lsu                      - list all users in the current channel\r\n\
-					all-users, lsU                  - list all users in all channels\r\n";
+					all-users, ls                   - list all users in all channels\r\n\
+					channel-perms, lsperm <name>    - list permissions for a channel\r\n\
+					\r\n\
+					passwd <pass>                   - change your password\r\n\
+					\r\n\
+					== Admin Commands ==\r\n\
+					useradd <name>                  - create a new user\r\n\
+					passwd-reset <name>             - reset a user's password\r\n";
 				user.info(HELP).await;
 			},
 			["quit"] | ["q"] => {
@@ -111,8 +108,25 @@ impl crate::ChatClient {
 
 					if users.contains_key(&name) { Err(CommandError::AlreadyExists)?; }
 
-					let (conf, pass) = crate::user::UserConfig::new();
-					users.insert(name, Arc::new(std::sync::Mutex::new(conf)));
+					let pass = UserConfig::gen_pass();
+					users.insert(name, Arc::new(std::sync::Mutex::new(UserConfig::new(&pass[..]))));
+					pass
+				};
+
+				user.info(&pass[..]).await;
+			},
+			["passwd-reset", name] => {
+				if user.config.lock().unwrap().get_global_perms() < PermLevel::MANAGE 
+					{ Err(CommandError::Forbidden)?; }
+
+				let pass = {
+					let mut users = self.server.users.lock().unwrap();
+
+					let Some(user) = users.get_mut(&Arc::from(*name)) 
+						else { return Err(CommandError::NotFound); };
+
+					let pass = UserConfig::gen_pass();
+					user.lock().unwrap().hash = UserConfig::hash(&pass[..]);
 					pass
 				};
 
@@ -123,87 +137,93 @@ impl crate::ChatClient {
 					crate::user::UserConfig::hash(pass.as_bytes());
 			},
 			["make-priv-channel", n @ ..] | ["mkchp", n @ ..] => {
-				// create a global channel
+				// TODO: create a priv channel
 				todo!()
 			},
 			["make-channel", path] | ["mkch", path] => {
-				let path = path.split('/').collect::<Vec<_>>();
-				let Err(Some(channels)) = channel_from_path(&path, -1) 
-					else { return Err(CommandError::InvalidPath); }; // grrr >:( 
-				let name = path.last().unwrap();
+				let path = user.path.as_path().join(Path::new(path));
 
-				let mut channels = channels.write().unwrap();
+				let channel = path.parent()
+					.and_then(|p| self.server.channel_from_path(p))
+					.ok_or(CommandError::InvalidPath)?;
 
-				if channels.iter().any(|c| &*c.name == *name) {
-					Err(CommandError::AlreadyExists)?;
-				}
+				let name = path.file_name()
+					.and_then(|n| n.to_str())
+					.ok_or(CommandError::InvalidPath)?;
 
-				let channel = crate::channel::Channel::new(Arc::from(*name));
-				{
-					let mut channel = channel.perms.write().unwrap();
-					channel.push((RestrictionKind::All, PermLevel::READ|PermLevel::WRITE));
-					channel.push((RestrictionKind::User(user.name.clone()), PermLevel::READ|PermLevel::WRITE|PermLevel::MANAGE));
-				}
+				let channels = &mut channel.write().unwrap().children;
+				if channels.contains_key(name) { Err(CommandError::AlreadyExists)?; }
 
-				channels.push(channel);
+				let mut channel = Channel::new();
+
+				channel.perms.push((RestrictionKind::All, PermLevel::READ|PermLevel::WRITE));
+				channel.perms.push((RestrictionKind::User(user.name.clone()), PermLevel::READ|PermLevel::WRITE|PermLevel::MANAGE));
+
+				channels.insert(Box::from(name), Arc::new(RwLock::new(channel)));
 			},
 			["remove-channel", path] | ["rmch", path] => {
-				let path = path.split('/').collect::<Vec<_>>();
+				let path = user.path.as_path().join(Path::new(path));
 
-				let (channels, index) = channel_from_path(&path, 0)
-					.map_err(|_| CommandError::InvalidPath)?;
+				let channels = path.parent()
+					.and_then(|p| self.server.channel_from_path(p))
+					.ok_or(CommandError::InvalidPath)?;
+
+				let name = path.file_name()
+					.and_then(|n| n.to_str())
+					.ok_or(CommandError::InvalidPath)?;
 
 				{
 					let config = user.config.lock().unwrap();
-					channels.read().unwrap()[index].perms.read().unwrap().iter()
-						.find(|(r, p)| match r {
-							RestrictionKind::User(u) => p.contains(PermLevel::MANAGE) && *u == user.name,
-							RestrictionKind::Role(r) => config.get_role(r).filter(|p| p.contains(PermLevel::MANAGE)).is_some(),
-							RestrictionKind::All     => p.contains(PermLevel::MANAGE) })
+					channels.read().unwrap().children.get(name)
+						.ok_or(CommandError::NotFound)?
+						.read().unwrap().perms.iter()
+						.find(|(r, _)| match r {
+							RestrictionKind::User(u) => *u == user.name,
+							RestrictionKind::Role(r) => config.get_role(r).is_some(),
+							RestrictionKind::All     => true })
 						.map(|_| ())
 						.or_else(|| (config.get_global_perms() > PermLevel::MANAGE).then_some(()))
 						.ok_or(CommandError::Forbidden)?;
 				}
 
-				let mut channels = channels.write().unwrap();
-				channels.remove(index);
+				channels.write().unwrap()
+					.children.remove(name).unwrap();
 			},
 			["channel", path] | ["ch", path] => {
-				let path = path.split('/').collect::<Vec<_>>();
-				let (channels, index) = channel_from_path(&path, 0)
-					.map_err(|_| CommandError::InvalidPath)?;
+				let path = user.path.as_path().join(Path::new(path));
 
-				mem::drop(mem::replace(&mut user.channel, channels.read().unwrap()[index].clone().subscribe()));
-			},
-			["channels"] | ["ls"] => {
-				use std::io::Write;
-				let tree = self.server.channels
-					.read().unwrap()
-					.iter().try_fold(Vec::new(), |mut acc, c| {
-						write!(acc, "{c}\r")?; Ok(acc) })
-					.map_err(|e: std::io::Error| CommandError::Other(e.to_string()))?;
+				let channel = self.server.channel_from_path(&path)
+					.ok_or(CommandError::InvalidPath)?;
 
-				user.info(&tree).await;
+				user.path = path;
+
+				mem::drop(mem::replace(&mut user.channel, Channel::subscribe(&channel)));
 			},
-			["users"] | ["lsu"] => {
-				// list all users in current channel
+			["channels"] | ["lsch"] => {
+				// TODO: print a channel tree
 				Err(CommandError::Unimplemented)?;
 			},
-			["all-users"] | ["lsU"] => {
+			["users"] | ["ls"] => {
+				// TODO: list all users in current channel
+				Err(CommandError::Unimplemented)?;
+			},
+			["all-users"] | ["lsa"] => {
 				let userlist = self.server.online_users.lock().unwrap()
 					.keys().fold(String::new(), |s, k| s + k + "\r\n");
 
 				user.info(userlist.as_bytes()).await;
 			},
-			["channel-perms", path] | ["lsp", path] => {
-				let path = path.split('/').collect::<Vec<_>>();
-				let (channels, index) = channel_from_path(&path, 0)
-					.map_err(|_| CommandError::InvalidPath)?;
+			["user", name] => {
+				// TODO: get user infp;
+				Err(CommandError::Unimplemented)?;
+			},
+			["channel-perms", path] | ["lsperm", path] => {
+				let path = user.path.as_path().join(Path::new(path));
 
-				let msg = {
-					let channel = &channels.read().unwrap()[index];
-					format!("{:?}", channel.perms.read().unwrap())
-				};
+				let channel = self.server.channel_from_path(&path)
+					.ok_or(CommandError::InvalidPath)?;
+
+				let msg = format!("{:?}", channel.read().unwrap().perms);
 
 				user.info(msg.as_bytes()).await;
 			},
