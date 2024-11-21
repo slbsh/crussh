@@ -11,6 +11,8 @@ use crate::user::User;
 use crate::server::Server;
 use crate::Event;
 use crate::channel::{PermLevel, RestrictionKind};
+use crate::channel::Channel;
+use crate::event::colour::*;
 
 pub enum CommandError {
 	InvalidUtf8,
@@ -27,7 +29,7 @@ pub enum CommandError {
 use std::fmt;
 impl fmt::Display for CommandError {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "{}", match self {
+		write!(f, "{RED}{BOLD}{}{RESET}", match self {
 			Self::InvalidUtf8    => "EUTF: Invalid utf8",
 			Self::InvalidArgs    => "EBADA: Invalid arguments",
 			Self::InvalidPath    => "EIPATH: Invalid Path",
@@ -37,7 +39,7 @@ impl fmt::Display for CommandError {
 			Self::Forbidden      => "EFRBD: Forbidden",
 			Self::Unimplemented  => "EUNIMP: Not implemented",
 			Self::Other(e)       => e,
-		}.bold().red()) // might clone cause we pass a ref
+		})
 	}
 }
 
