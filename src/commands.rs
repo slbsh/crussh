@@ -226,8 +226,31 @@ impl crate::ChatClient {
 				user.info(userlist.as_bytes()).await;
 			},
 			["user", name] => {
-				// TODO: get user info
-				Err(CommandError::Unimplemented)?;
+				// :user <name>
+				//
+				// :user <name>
+				// online: (true|false)
+				// current-channel: (/path)
+				// roles:
+				// ├── <role> - <perm>
+				// └── ...
+
+				let name = Arc::from(*name);
+				let mut buf: Vec<u8> = Vec::new();
+				{
+					let server = SERVER.read();
+					let user = server.users.get(&name)
+						.ok_or(CommandError::NotFound)?
+						.lock()
+						.unwrap();
+					buf.extend(format!("online: {:?}\r\n", server.online_users.contains_key(&name)).as_bytes());
+					buf.extend(b"roles:\r\n");
+					user.roles.iter().enumerate().for_each(|(index, (name, level))|
+						buf.extend(format!("{} {:?} - {:?}\r\n",
+					if index == user.roles.len() - 1  { "└──" } else { "├──" },
+						 name, level).as_bytes()));
+				}
+				user.info(&buf).await;
 			},
 			["channel-perms", path] | ["lsperm", path] => {
 				let path = user.path.as_path().join(Path::new(path));
