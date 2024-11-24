@@ -1,5 +1,5 @@
 use std::time::Duration;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::mem::{self, ManuallyDrop};
 use tokio::sync::Mutex;
 
@@ -14,23 +14,23 @@ mod server;
 mod commands;
 
 use user::{User, Connection, UserState};
-use server::Server;
+use server::ServerSerializer;
 use event::Event;
-
-
-pub const KEY_FILE: &str   = "key";
-pub const STATE_FILE: &str = "state.bin";
-
-const MAX_MSG_LEN: usize = 1024;
 
 #[macro_export]
 macro_rules! init {
 	($dest:expr, $src:expr) => { mem::forget(mem::replace($dest, $src)) }
 }
 
+static SERVER: LazyLock<ServerSerializer> = 
+	LazyLock::new(|| ServerSerializer::new(&std::env::var("STATE_FILE")
+		.unwrap_or_else(|_| String::from("state.bin"))));
+
 
 #[tokio::main]
 async fn main() {
+	const KEY_FILE: &str   = "key";
+
 	let get_key_pair = || {
 		use std::io::Read;
 
@@ -60,56 +60,44 @@ async fn main() {
 		.await.unwrap();
 }
 
-struct ChatClient {
-	server: Arc<Server>,
-	// ugly, but by far the best way to manually initialize the user
-	user:   Arc<Mutex<ManuallyDrop<User>>>,
-}
+struct ChatClient(Arc<Mutex<ManuallyDrop<User>>>);
 
 impl SshServer for ChatClient {
+	// SAFETY: zeroing an Arc is "UB", but we prevent it from dropping so its fine
+	// SAFETY: fu Mai
 	type Handler = Self;
 	#[allow(invalid_value)]
 	fn new_client(&mut self, _: Option<std::net::SocketAddr>) -> Self {
-		Self {
-			server: Arc::clone(&self.server),
-			user:   Arc::new(Mutex::new(ManuallyDrop::new(unsafe { mem::MaybeUninit::zeroed().assume_init() }))),
-		}
+		Self(Arc::new(Mutex::new(ManuallyDrop::new(unsafe { mem::MaybeUninit::zeroed().assume_init() }))))
 	}
 }
 
 impl Drop for ChatClient {
 	fn drop(&mut self) {
-		let user = &mut tokio::task::block_in_place(|| self.user.blocking_lock());
+		let user = &mut tokio::task::block_in_place(|| self.blocking_lock());
 
 		// weak + strong ref take 2 words, meaning ptr is offset by 16 bytes
 		if user.name.as_ref().as_ptr() as usize == mem::size_of::<usize>() * 2 { return; }
 
-		self.server.online_users
-			.lock().unwrap()
-			.remove(&user.name);
-
+		SERVER.write().online_users.remove(&user.name);
 		unsafe { ManuallyDrop::drop(user) }
 	}
 }
 
+impl std::ops::Deref for ChatClient {
+	type Target = Arc<Mutex<ManuallyDrop<User>>>;
+	fn deref(&self) -> &Self::Target { &self.0 }
+}
+
+
 impl ChatClient {
-	// SAFETY: zeroing an Arc is "UB", but we prevent it from dropping so its fine
-	// SAFETY: fu Mai
 	#[allow(invalid_value)] 
 	fn new() -> Self {
-		Self {
-			server: Arc::new(
-				std::fs::read(STATE_FILE)
-					.inspect_err(|e| eprintln!("failed to open `{STATE_FILE}`: {e}"))
-					.map(|s| bincode::deserialize(&s).unwrap_or_else(|e|
-						panic!("failed to parse `{STATE_FILE}`: {e}")))
-					.unwrap_or_default()),
-			// SAFETY: pretty sure the first instance is only there to init
-			user: unsafe { mem::MaybeUninit::zeroed().assume_init() },
-		}
+		// SAFETY: pretty sure the first instance is only there to init
+		unsafe { mem::MaybeUninit::zeroed().assume_init() }
 	}
 
-	async fn close(&self, 
+	async fn close(
 		session: &mut Session,
 		channel: ChannelId, 
 		user: &mut tokio::sync::MutexGuard<'_, ManuallyDrop<User>>) {
@@ -130,7 +118,7 @@ impl Handler for ChatClient {
 		channel: russh::Channel<Msg>,
 		session: &mut Session,
 	) -> Result<bool, Self::Error> {
-		let user = self.user.lock().await;
+		let user = self.lock().await;
 
 		// prob not gonna happen, but just in case
 		if user.name.as_ref().as_ptr() as usize == mem::size_of::<usize>() * 2 { 
@@ -143,20 +131,19 @@ impl Handler for ChatClient {
 		drop(user);
 
 		// go online
-		self.server.online_users
-			.lock().unwrap()
+		SERVER.write().online_users
 			.insert(name.clone(), conf.clone());
 
 		init!(
-			&mut self.user,
-			User::new(name.clone(), conf, self.server.clone(), conn)
+			&mut self.0,
+			User::new(name.clone(), conf, conn)
 		);
 
 		let msg = CryptoVec::from_slice(b"Welcome! :help for commands, ctrl-c to exit.\r\n");
 		session.handle().data(channel.id(), msg).await.unwrap();
 
 		// can sometimes fail cause order of conn isnt guaranteed
-		let _ = self.user.lock().await.channel
+		let _ = self.lock().await.channel
 			.send(Event::Join(name)); 
 
 		Ok(true)
@@ -167,9 +154,9 @@ impl Handler for ChatClient {
 		{ Ok(()) }
 
 	async fn auth_password(&mut self, uname: &str, pass: &str) -> Result<Auth, Self::Error> {
-		match tokio::task::block_in_place(|| self.server.validate_pass(uname, pass)) {
+		match tokio::task::block_in_place(|| SERVER.read().validate_pass(uname, pass)) {
 			Some(user) => {
-				let mut usr = self.user.lock().await;
+				let mut usr = self.lock().await;
 				init!(&mut usr.config, user.clone());
 				init!(&mut usr.name,   Arc::from(uname));
 				Ok(Auth::Accept)
@@ -185,25 +172,35 @@ impl Handler for ChatClient {
 		macro_rules! data {
 			($data:expr) => { session.data(channel, CryptoVec::from_slice($data)) }}
 
-		let mut user = self.user.lock().await;
+		let mut user = self.lock().await;
 
 		match data {
 			_ if matches!(user.state, UserState::Info(_)) => {
 				let UserState::Info(data) =
-				mem::replace(&mut user.state, UserState::Normal) 
-				else { unreachable!(); };
+					mem::replace(&mut user.state, UserState::Normal) 
+					else { unreachable!(); };
 
 				user.clear_info(&data).await;
 			},
 
-			[3] => self.close(session, channel, &mut user).await,
+			[3] => Self::close(session, channel, &mut user).await,
 
 			[13] => {
 				if user.buffer.is_empty() { return Ok(()); }
 
+				fn trim(data: &[u8]) -> &[u8] { unsafe { 
+					data.get_unchecked(
+						data.iter()
+							.position(|&b| !(b as char).is_whitespace())
+							.unwrap_or(data.len()) ..
+						data.iter()
+							.rposition(|&b| !(b as char).is_whitespace())
+							.map_or(0, |i| i + 1))
+				}}
+
 				// FIXME: dont clone :p
 				if let Some(buffer) = trim(&user.buffer.clone()).strip_prefix(b":") {
-					if let Err(e) = self.command(channel, session, buffer, &mut user).await {
+					if let Err(e) = Self::command(channel, session, buffer, &mut user).await {
 						user.info(e.to_string().as_bytes()).await;
 						user.buf_clear();
 					};
@@ -247,6 +244,7 @@ impl Handler for ChatClient {
 			},
 
 			_ => {
+				const MAX_MSG_LEN: usize = 1024;
 				if user.buffer.len() >= MAX_MSG_LEN { return Ok(()); }
 
 				let cursor = user.cursor;
@@ -259,13 +257,3 @@ impl Handler for ChatClient {
 		Ok(())
 	}
 }
-
-fn trim(data: &[u8]) -> &[u8] { unsafe { 
-	data.get_unchecked(
-		data.iter()
-			.position(|&b| !(b as char).is_whitespace())
-			.unwrap_or(data.len()) ..
-		data.iter()
-			.rposition(|&b| !(b as char).is_whitespace())
-			.map_or(0, |i| i + 1))
-}}

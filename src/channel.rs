@@ -43,17 +43,22 @@ fn perms_sorted<'de, D: serde::Deserializer<'de>>(d: D)
 
 impl fmt::Display for Channel {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-		todo!()
-		// fn draw_tree(channel: &Channel, f: &mut fmt::Formatter, prefix: &str) -> fmt::Result {
-		// 	writeln!(f, "{prefix}{}\r", channel.name)?;
-		//
-		// 	channel.children.iter().enumerate().try_for_each(|(i, child)| {
-		// 		write!(f, "{prefix}{}─", if i == channel.children.len() - 1 { "└" } else { "├" })?;
-		// 		draw_tree(child.read().unwrap(), f, prefix)
-		// 	})
-		// }
-		//
-		// draw_tree(self, f, "")
+		fn draw_tree(
+			(name, channel): (&str, &Channel),
+			f: &mut fmt::Formatter,
+			level: usize, last: bool)
+		-> fmt::Result {
+			writeln!(f, "{level}{}{}{}\r", 
+				if level <= 1 { String::new() } else { "   ".repeat(level) },
+				if level < 1 { "" } else if last { "└─" } else { "├─" },
+				name)?;
+
+			channel.children.iter().enumerate().try_for_each(|(i, (n, key))|
+				draw_tree((n, &key.read().unwrap()), f, level + 1, 
+					channel.children.len() == i + 1))
+		}
+
+		draw_tree(("/", self), f, 0, true)
 	}
 }
 

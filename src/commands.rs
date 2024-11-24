@@ -11,6 +11,7 @@ use crate::Event;
 use crate::channel::{PermLevel, RestrictionKind};
 use crate::channel::Channel;
 use crate::event::colour::*;
+use crate::SERVER;
 
 pub enum CommandError {
 	InvalidUtf8,
@@ -21,7 +22,6 @@ pub enum CommandError {
 	AlreadyExists,
 	Forbidden,
 	Unimplemented,
-	Other(String),
 }
 
 use std::fmt;
@@ -33,16 +33,15 @@ impl fmt::Display for CommandError {
 			Self::InvalidPath    => "EIPATH: Invalid Path",
 			Self::InvalidCommand => "EINVAL: Invalid command",
 			Self::NotFound       => "ENFOUND: Not found",
-			Self::AlreadyExists  => "EEXIST: User already exists",
+			Self::AlreadyExists  => "EEXIST: Already exists",
 			Self::Forbidden      => "EFRBD: Forbidden",
 			Self::Unimplemented  => "EUNIMP: Not implemented",
-			Self::Other(e)       => e,
 		})
 	}
 }
 
 impl crate::ChatClient {
-	pub async fn command(&self, 
+	pub async fn command(
 		channel: ChannelId, 
 		session: &mut Session,
 		data: &[u8],
@@ -80,7 +79,7 @@ impl crate::ChatClient {
 			},
 			["quit"] | ["q"] => {
 				data!(b"\x1b[2K\r");
-				self.close(session, channel, user).await;
+				Self::close(session, channel, user).await;
 				return Ok(());
 			},
 			["clear"] => data!(b"\x1b[2J\x1b[H"),
@@ -89,7 +88,7 @@ impl crate::ChatClient {
 				let (name, msg) = args.split_once(' ')
 					.ok_or(CommandError::InvalidArgs)?;
 
-				self.server.users.lock().unwrap()
+				SERVER.read().users
 					.contains_key(name).then_some(())
 					.ok_or(CommandError::NotFound)?;
 
@@ -102,16 +101,13 @@ impl crate::ChatClient {
 					Err(CommandError::Forbidden)?;
 				}
 
-				let pass = { // ugly but rust cant comprehend that drop() unlocks a mutex
-					let name = Arc::from(*name);
-					let mut users = self.server.users.lock().unwrap();
+				let name = Arc::from(*name);
 
-					if users.contains_key(&name) { Err(CommandError::AlreadyExists)?; }
+				if SERVER.read().users.contains_key(&name) { Err(CommandError::AlreadyExists)?; }
 
-					let pass = UserConfig::gen_pass();
-					users.insert(name, Arc::new(std::sync::Mutex::new(UserConfig::new(&pass[..]))));
-					pass
-				};
+				let pass = UserConfig::gen_pass();
+				SERVER.write().users
+					.insert(name, Arc::new(std::sync::Mutex::new(UserConfig::new(&pass[..]))));
 
 				user.info(&pass[..]).await;
 			},
@@ -120,7 +116,7 @@ impl crate::ChatClient {
 					{ Err(CommandError::Forbidden)?; }
 
 				let pass = {
-					let mut users = self.server.users.lock().unwrap();
+					let users = &mut SERVER.write().users;
 
 					let Some(user) = users.get_mut(&Arc::from(*name)) 
 						else { return Err(CommandError::NotFound); };
@@ -140,11 +136,11 @@ impl crate::ChatClient {
 				// TODO: create a priv channel
 				todo!()
 			},
-			["make-channel", path] | ["mkch", path] => {
+			["mkch", path] => {
 				let path = user.path.as_path().join(Path::new(path));
 
 				let channel = path.parent()
-					.and_then(|p| self.server.channel_from_path(p))
+					.and_then(|p| SERVER.read().channel_from_path(p))
 					.ok_or(CommandError::InvalidPath)?;
 
 				let name = path.file_name()
@@ -165,7 +161,7 @@ impl crate::ChatClient {
 				let path = user.path.as_path().join(Path::new(path));
 
 				let channels = path.parent()
-					.and_then(|p| self.server.channel_from_path(p))
+					.and_then(|p| SERVER.read().channel_from_path(p))
 					.ok_or(CommandError::InvalidPath)?;
 
 				let name = path.file_name()
@@ -192,35 +188,51 @@ impl crate::ChatClient {
 			["channel", path] | ["ch", path] => {
 				let path = user.path.as_path().join(Path::new(path));
 
-				let channel = self.server.channel_from_path(&path)
+				let channel = SERVER.read().channel_from_path(&path)
 					.ok_or(CommandError::InvalidPath)?;
 
 				user.path = path;
 
 				mem::drop(mem::replace(&mut user.channel, Channel::subscribe(&channel)));
 			},
-			["channels"] | ["lsch"] => {
-				// TODO: print a channel tree
-				Err(CommandError::Unimplemented)?;
+			["pwch"] => {
+				// SAFETY: info doesnt even get close to modyfying user path. 
+				// SAFETY: &mut is needed so it can send data. 
+				// SAFETY: we're just sidestepping the borrow checker to let it read the path directly
+				let path = user.path.as_os_str().as_encoded_bytes() as *const _;
+				user.info(unsafe { &*path }).await;
+			},
+			["lsch"] => {
+				let thing = SERVER.read().channel_from_path(&user.path)
+					.ok_or(CommandError::InvalidPath)?
+					.read().unwrap().to_string();
+				user.info(thing.as_bytes()).await;
+			},
+			["lsch", path] => {
+				let path = user.path.as_path().join(Path::new(path));
+				let thing = SERVER.read().channel_from_path(&path)
+					.ok_or(CommandError::InvalidPath)?
+					.read().unwrap().to_string();
+				user.info(thing.as_bytes()).await;
 			},
 			["users"] | ["ls"] => {
 				// TODO: list all users in current channel
 				Err(CommandError::Unimplemented)?;
 			},
 			["all-users"] | ["lsa"] => {
-				let userlist = self.server.online_users.lock().unwrap()
+				let userlist = SERVER.read().online_users
 					.keys().fold(String::new(), |s, k| s + k + "\r\n");
 
 				user.info(userlist.as_bytes()).await;
 			},
 			["user", name] => {
-				// TODO: get user infp;
+				// TODO: get user info
 				Err(CommandError::Unimplemented)?;
 			},
 			["channel-perms", path] | ["lsperm", path] => {
 				let path = user.path.as_path().join(Path::new(path));
 
-				let channel = self.server.channel_from_path(&path)
+				let channel = SERVER.read().channel_from_path(&path)
 					.ok_or(CommandError::InvalidPath)?;
 
 				let msg = format!("{:?}", channel.read().unwrap().perms);

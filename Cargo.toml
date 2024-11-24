@@ -8,7 +8,7 @@ russh = "0.46" # russh is kinda weird and needs ye to get like 2 more carates + 
 russh-keys = { version = "0.46", default-features = false } 
 ed25519-dalek = { version = "2.1", default-features = false }
 
-tokio = { version = "1.41", default-features = false, features = ["sync"] }
+tokio = { version = "1.41", default-features = false, features = ["sync", "fs", "io-util"] }
 async-trait = "0.1" # grrrr >:(
 
 serde = { version = "1.0", features = ["derive", "rc"] }

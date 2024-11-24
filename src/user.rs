@@ -8,9 +8,9 @@ use tokio::sync::broadcast::error::TryRecvError;
 use serde::Deserialize;
 use russh::CryptoVec;
 
-use crate::server::Server;
 use crate::channel::{SubscribedChannel, PermLevel};
 use crate::event::Event;
+use crate::SERVER;
 
 
 pub struct User {
@@ -84,14 +84,14 @@ pub enum UserState {
 }
 
 impl User {
-   pub fn new(name: Arc<str>, config: UserConfLock, server: Arc<Server>, conn: Connection) -> Arc<AsyncMutex<ManuallyDrop<Self>>> {
+   pub fn new(name: Arc<str>, config: UserConfLock, conn: Connection) -> Arc<AsyncMutex<ManuallyDrop<Self>>> {
 		Arc::new_cyclic(|user|
 			AsyncMutex::new(ManuallyDrop::new(Self { 
 				name, config, conn, 
 				path: PathBuf::from("/"), // TODO: save user's current channel
 				handle: task::spawn(Self::event_loop(user.clone())),
 				channel: crate::channel::Channel::subscribe(
-					&server.channel_from_path(&Path::new("/"))
+					&SERVER.read().channel_from_path(Path::new("/"))
 						.expect("default channel does not exist")),
 				buffer: Vec::with_capacity(256),
 				cursor: 0,
