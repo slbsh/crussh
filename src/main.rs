@@ -29,7 +29,7 @@ static SERVER: LazyLock<ServerSerializer> =
 
 #[tokio::main]
 async fn main() {
-	const KEY_FILE: &str   = "key";
+	const KEY_FILE: &str = "key";
 
 	let get_key_pair = || {
 		use std::io::Read;
@@ -104,6 +104,14 @@ impl ChatClient {
 		user.channel.send(Event::Terminate).unwrap();
 		user.channel.send(Event::Leave(user.name.clone())).unwrap();
 
+		{ // go offline
+			let mut server = SERVER.write();
+			server.online_users.remove(&user.name);
+			let mut conf = server.users.get(&user.name).unwrap().lock().unwrap();
+			conf.online_time = 0;
+			conf.last_login = chrono::Utc::now().timestamp() as u64;
+		}
+
 		session.data(channel, CryptoVec::from_slice(b"\r"));
 		session.close(channel);
 	}
@@ -126,18 +134,20 @@ impl Handler for ChatClient {
 		}
 
 		let conn = Connection::new(channel.id(), session.handle());
-		let conf = user.config.clone();
-		let name = user.name.clone();
+		let conf = Arc::clone(&user.config);
+		let name = Arc::clone(&user.name);
 		drop(user);
 
-		// go online
-		SERVER.write().online_users
-			.insert(name.clone(), conf.clone());
+		{ // go online
+			let mut server = SERVER.write();
+			server.online_users.insert(Arc::clone(&name));
+			server.users.get(&name).unwrap()
+				.lock().unwrap().online_time 
+					= chrono::Utc::now().timestamp() as u64;
+		}
 
-		init!(
-			&mut self.0,
-			User::new(name.clone(), conf, conn)
-		);
+		init!(&mut self.0,
+			User::new(Arc::clone(&name), conf, conn));
 
 		let msg = CryptoVec::from_slice(b"Welcome! :help for commands, ctrl-c to exit.\r\n");
 		session.handle().data(channel.id(), msg).await.unwrap();
