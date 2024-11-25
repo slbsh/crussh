@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex, RwLock};
-use std::collections::{HashMap};
+use std::collections::{HashMap, BTreeSet};
 use std::path::Path;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::fs::File;
@@ -7,12 +7,13 @@ use std::io::Read;
 
 use crate::channel::{Channel, PermLevel};
 use crate::user::UserConfig;
+
 #[derive(serde::Deserialize, serde::Serialize)]
 pub struct Server {
    pub root_channel: Arc<RwLock<Channel>>, // double indirection cause needs to be shared
    pub users:        HashMap<Arc<str>, Arc<Mutex<UserConfig>>>,
    #[serde(skip)]
-   pub online_users: HashMap<Arc<str>, Arc<Mutex<UserConfig>>>, // TODO: unduplicate entries
+   pub online_users: BTreeSet<Arc<str>>,
 }
 
 impl Default for Server {
@@ -21,12 +22,13 @@ impl Default for Server {
       users.insert(Arc::from("admin"), Arc::new(Mutex::new(crate::user::UserConfig {
 			hash:  0xd8acbb0fa6cac9, // "admin"
 			roles: vec![(Box::from("admin"), PermLevel::READ|PermLevel::WRITE|PermLevel::MANAGE)],
+			.. Default::default()
 		})));
 
       Self {
          users,
          root_channel: Arc::new(RwLock::new(Channel::new())),
-         online_users: HashMap::new(),
+         online_users: BTreeSet::new(),
       }
    }
 }

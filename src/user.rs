@@ -30,12 +30,17 @@ pub struct User {
 
 // condvar to save config changes
 pub type UserConfLock = Arc<Mutex<UserConfig>>;
+type Timestamp = u64;
+const PASS_LEN: usize = 8;
 
-#[derive(Deserialize, serde::Serialize)]
+#[derive(Default, Deserialize, serde::Serialize)]
 pub struct UserConfig {
    #[serde(deserialize_with = "UserConfig::deserialize_hash")]
    pub hash:  u64,
    pub roles: Vec<(Box<str>, PermLevel)>,
+	
+	pub last_login:  Timestamp,
+	pub online_time: Timestamp,
 }
 
 impl UserConfig {
@@ -43,12 +48,13 @@ impl UserConfig {
       Self { 
          hash: UserConfig::hash(pass),
          roles: Vec::new(),
+			.. Default::default()
       }
    }
 
-	pub fn gen_pass() -> [u8; 8] {
+	pub fn gen_pass() -> [u8; PASS_LEN] {
       use rand::Rng;
-      let mut pass = [0; 8];
+      let mut pass = [0; PASS_LEN];
       rand::thread_rng()
          .sample_iter(&rand::distributions::Alphanumeric)
          .zip(pass.iter_mut())

@@ -67,7 +67,8 @@ impl crate::ChatClient {
 					make-priv-channel, mkchp <name> - create a new private channel\r\n\
 					remove-channel, rmch <name>     - remove a channel\r\n\
 					channel, ch <name>              - move to a channel\r\n\
-					all-users, ls                   - list all users in all channels\r\n\
+					all-users, lsa                  - list all online users\r\n\
+					whois <name>                    - get info on a user\r\n\
 					channel-perms, lsperm <name>    - list permissions for a channel\r\n\
 					\r\n\
 					passwd <pass>                   - change your password\r\n\
@@ -221,35 +222,53 @@ impl crate::ChatClient {
 			},
 			["all-users"] | ["lsa"] => {
 				let userlist = SERVER.read().online_users
-					.keys().fold(String::new(), |s, k| s + k + "\r\n");
+					.iter().fold(String::new(), |s, k| s + k + "\r\n");
 
 				user.info(userlist.as_bytes()).await;
 			},
-			["user", name] => {
-				// :user <name>
-				//
-				// :user <name>
-				// online: (true|false)
-				// current-channel: (/path)
-				// roles:
-				// ├── <role> - <perm>
-				// └── ...
+			["whois", name] => {
+				use chrono::{Utc, TimeZone};
 
 				let name = Arc::from(*name);
-				let mut buf: Vec<u8> = Vec::new();
-				{
+				let buf = {
 					let server = SERVER.read();
 					let user = server.users.get(&name)
 						.ok_or(CommandError::NotFound)?
-						.lock()
-						.unwrap();
-					buf.extend(format!("online: {:?}\r\n", server.online_users.contains_key(&name)).as_bytes());
-					buf.extend(b"roles:\r\n");
-					user.roles.iter().enumerate().for_each(|(index, (name, level))|
-						buf.extend(format!("{} {:?} - {:?}\r\n",
-					if index == user.roles.len() - 1  { "└──" } else { "├──" },
-						 name, level).as_bytes()));
-				}
+						.lock().unwrap();
+
+					let fmt_time = |time: u64| {
+						let time = Utc.timestamp_opt(time as i64, 0).unwrap();
+						format!("{} ({BOLD}{}{RESET} ago)", 
+							time.format(&format!("{BOLD}%H:%M{RESET} %B %d, %Y")),
+							humantime::format_duration(std::time::Duration::from_secs(
+								Utc::now().signed_duration_since(time)
+									.to_std().unwrap().as_secs())))
+					};
+
+					let mut buf: Vec<u8> = match server.online_users.contains(&name) {
+						false => Vec::from(b"online: false\r\n"),
+						true  => format!("online: {}\r\n", fmt_time(user.online_time)).into_bytes(),
+					};
+
+					// current-channel: (/path)
+					// buf.extend(b"current-channel: ");
+					// buf.extend(user.path.as_os_str().as_encoded_bytes());
+					// buf.extend(b"\r\n");
+					
+					if user.last_login != 0 {
+						buf.extend(format!("last-online: {}\r\n", fmt_time(user.last_login)).as_bytes());
+					}
+
+					if !user.roles.is_empty() {
+						buf.extend(b"roles:\r\n");
+						user.roles.iter().enumerate().for_each(|(index, (name, level))|
+							buf.extend(format!("{} {:?} - {:?}\r\n",
+							if index == user.roles.len() - 1  { "└──" } else { "├──" },
+							name, level).as_bytes()));
+					}
+
+					buf
+				};
 				user.info(&buf).await;
 			},
 			["channel-perms", path] | ["lsperm", path] => {
