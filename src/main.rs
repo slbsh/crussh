@@ -1,11 +1,12 @@
 use std::time::Duration;
 use std::sync::{Arc, LazyLock};
 use std::mem::{self, ManuallyDrop};
+use std::path::Path;
 use tokio::sync::Mutex;
 
 use russh::server::{Server as SshServer, Msg, Session, Handler, Auth};
-use russh::{MethodSet, CryptoVec, ChannelId};
-use russh_keys::key::KeyPair;
+use russh::{MethodSet, CryptoVec, ChannelId, SshId};
+use russh::keys::PrivateKey;
 
 mod user;
 mod channel;
@@ -31,26 +32,12 @@ static SERVER: LazyLock<ServerSerializer> =
 async fn main() {
 	const KEY_FILE: &str = "key";
 
-	let get_key_pair = || {
-		use std::io::Read;
-
-		let mut file = std::fs::File::open(KEY_FILE)
-			.expect("err opening key file");
-
-		let mut buf = [0; 64];
-		file.read_exact(&mut buf)
-			.expect("err reading key");
-
-		KeyPair::Ed25519(
-			ed25519_dalek::SigningKey::from_keypair_bytes(&buf)
-				.expect("err parsing key"))
-	};
-
 	let config = russh::server::Config {
+		server_id:                   SshId::Standard(format!("SSH-2.0-crussh_{}", env!("CARGO_PKG_VERSION"))),
 		inactivity_timeout:          Some(Duration::from_secs(3600)),
 		auth_rejection_time:              Duration::from_secs(2),
 		auth_rejection_time_initial: Some(Duration::from_secs(0)),
-		keys:                        vec![get_key_pair()],
+		keys:                        vec![PrivateKey::read_openssh_file(Path::new(KEY_FILE)).unwrap()],
 		methods:                     MethodSet::PASSWORD,
 		..Default::default()
 	};
@@ -112,8 +99,8 @@ impl ChatClient {
 			conf.last_login = chrono::Utc::now().timestamp() as u64;
 		}
 
-		session.data(channel, CryptoVec::from_slice(b"\r"));
-		session.close(channel);
+		session.data(channel, CryptoVec::from_slice(b"\r")).unwrap();
+		session.close(channel).unwrap();
 	}
 }
 
@@ -180,7 +167,7 @@ impl Handler for ChatClient {
 	async fn data(&mut self, channel: ChannelId, data: &[u8], session: &mut Session)
 	-> Result<(), Self::Error> {
 		macro_rules! data {
-			($data:expr) => { session.data(channel, CryptoVec::from_slice($data)) }}
+			($data:expr) => { session.data(channel, CryptoVec::from_slice($data)).unwrap() }}
 
 		let mut user = self.lock().await;
 

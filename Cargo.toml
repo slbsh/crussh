@@ -4,11 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-russh = "0.46" # russh is kinda weird and needs ye to get like 2 more carates + tokio to do any useful key stuff
-russh-keys = { version = "0.46", default-features = false } 
-ed25519-dalek = { version = "2.1", default-features = false }
+russh = "0.49"
 
-tokio = { version = "1.41", default-features = false, features = ["sync", "fs", "io-util"] }
+tokio = { version = "1.42", default-features = false, features = ["sync", "fs", "io-util"] }
 async-trait = "0.1" # grrrr >:(
 
 serde = { version = "1.0", features = ["derive", "rc"] }

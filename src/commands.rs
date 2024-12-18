@@ -48,7 +48,7 @@ impl crate::ChatClient {
 		user: &mut MutexGuard<'_, ManuallyDrop<User>>)
 	-> Result<(), CommandError> {
 		macro_rules! data {
-			($data:expr) => { session.data(channel, CryptoVec::from_slice($data)) }}
+			($data:expr) => { session.data(channel, CryptoVec::from_slice($data)).unwrap() }}
 
 		let cmd = std::str::from_utf8(data)
 			.map_err(|_| CommandError::InvalidUtf8)?
